@@ -7,27 +7,51 @@ app.use(cors());
 app.use(express.json());
 
 const CJ_API_KEY = process.env.CJ_API_KEY;
+let cachedCJAccessToken = null;
+let cachedCJAccessTokenAt = 0;
 
-if (!CJ_API_KEY) {
-  console.warn("CJ_API_KEY is missing. Set it as an environment variable.");
-}
+async function getCJAccessToken() {
+  const now = Date.now();
+  const tokenIsFresh =
+    cachedCJAccessToken && now - cachedCJAccessTokenAt < 23 * 60 * 60 * 1000;
 
-try {
-  if (!admin.apps.length) {
-    admin.initializeApp();
+  if (tokenIsFresh) return cachedCJAccessToken;
+
+  const response = await fetch(
+    "https://developers.cjdropshipping.com/api2.0/v1/authentication/getAccessToken",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey: CJ_API_KEY }),
+    }
+  );
+
+  const json = await response.json();
+  const accessToken =
+    json?.data?.accessToken ||
+    json?.data?.access_token ||
+    json?.result?.accessToken ||
+    json?.accessToken;
+
+  if (!accessToken) {
+    throw new Error(`CJ access token failed: ${JSON.stringify(json).slice(0, 500)}`);
   }
-} catch (error) {
-  console.warn("Firebase Admin not initialized. Firestore cache will be skipped.", error?.message);
+
+  cachedCJAccessToken = accessToken;
+  cachedCJAccessTokenAt = now;
+  return accessToken;
 }
 
 function priceToIls(value) {
-  const numberValue = Number(value || 0);
-  if (!Number.isFinite(numberValue) || numberValue <= 0) return 99;
-  return Math.round(numberValue * 3.7);
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return 99;
+  return Math.round(n * 3.7);
 }
 
 function normalizeCJItem(item, index = 0) {
-  const rawPrice = item.sellPrice || item.price || item.productSellPrice || item.variantSellPrice;
+  const rawPrice =
+    item.sellPrice || item.price || item.productSellPrice || item.variantSellPrice;
+
   const price = priceToIls(rawPrice);
   const id = item.pid || item.productId || item.id || `cj-${Date.now()}-${index}`;
   const title = item.productNameEn || item.productName || item.title || "CJ Product";
@@ -58,7 +82,6 @@ function normalizeCJItem(item, index = 0) {
     supplier: "CJdropshipping",
     shipping: "CJ משלוח 7–18 ימים",
     supplierProductId: id,
-    supplierRaw: item,
     searchTags: [
       title,
       category,
@@ -75,49 +98,46 @@ function normalizeCJItem(item, index = 0) {
 }
 
 async function fetchCJProducts(keyword = "watch") {
-  const response = await fetch("https://developers.cjdropshipping.com/api2.0/v1/product/list", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "CJ-Access-Token": CJ_API_KEY,
-    },
-    body: JSON.stringify({
-      pageNum: 1,
-      pageSize: 30,
-      productNameEn: keyword || "watch",
-    }),
-  });
+  const accessToken = await getCJAccessToken();
+
+  const response = await fetch(
+    "https://developers.cjdropshipping.com/api2.0/v1/product/list",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "CJ-Access-Token": accessToken,
+      },
+      body: JSON.stringify({
+        pageNum: 1,
+        pageSize: 30,
+        productNameEn: keyword || "watch",
+      }),
+    }
+  );
 
   const json = await response.json();
   const list = json?.data?.list || json?.data || json?.result?.list || [];
 
   if (!Array.isArray(list) || list.length === 0) {
-    throw new Error(`CJ returned empty list: ${JSON.stringify(json).slice(0, 300)}`);
+    throw new Error(`CJ returned empty list: ${JSON.stringify(json).slice(0, 500)}`);
   }
 
   return list.map(normalizeCJItem);
 }
 
-async function cacheProducts(products, keyword) {
-  try {
-    const db = admin.firestore();
-    await db.collection("products").add({
-      items: products,
-      count: products.length,
-      keyword,
-      source: "backend-cj-live",
-      syncedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-  } catch (error) {
-    console.warn("Firestore cache skipped:", error?.message);
-  }
-}
+app.get("/", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "Buyli Backend Proxy",
+    version: "V13",
+  });
+});
 
 app.get("/products", async (req, res) => {
   try {
     const keyword = String(req.query.keyword || "watch");
     const products = await fetchCJProducts(keyword);
-    await cacheProducts(products, keyword);
 
     res.json({
       products,
@@ -140,7 +160,6 @@ app.post("/sync-products", async (req, res) => {
   try {
     const keyword = String(req.body?.keyword || "watch");
     const products = await fetchCJProducts(keyword);
-    await cacheProducts(products, keyword);
 
     res.json({
       products,
@@ -161,5 +180,5 @@ app.post("/sync-products", async (req, res) => {
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  console.log(`Buyli backend proxy running on port ${port}`);
+  console.log(`Buyli backend proxy V13 running on port ${port}`);
 });
