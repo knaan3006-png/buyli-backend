@@ -1,184 +1,224 @@
-import express from "express";
-import cors from "cors";
-import admin from "firebase-admin";
+export type BuyliProduct = {
+  id: string;
+  name: string;
+  price: number;
+  image: string;
+  category: string;
+  description?: string;
+  source?: string;
+};
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+const CJ_BASE_URL = "https://developers.cjdropshipping.com/api2.0/v1";
 
-const CJ_API_KEY = process.env.CJ_API_KEY;
-let cachedCJAccessToken = null;
-let cachedCJAccessTokenAt = 0;
+const FALLBACK_PRODUCTS: BuyliProduct[] = [
+  {
+    id: "fallback-1",
+    name: "שעון חכם ספורטיבי",
+    price: 89,
+    image: "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800",
+    category: "גאדג׳טים",
+    description: "שעון חכם בעיצוב מודרני עם מסך איכותי",
+    source: "fallback"
+  },
+  {
+    id: "fallback-2",
+    name: "אוזניות Bluetooth אלחוטיות",
+    price: 69,
+    image: "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800",
+    category: "אלקטרוניקה",
+    description: "אוזניות אלחוטיות לשימוש יומיומי",
+    source: "fallback"
+  },
+  {
+    id: "fallback-3",
+    name: "תיק גב יומיומי",
+    price: 79,
+    image: "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=800",
+    category: "אופנה",
+    description: "תיק גב נוח לעבודה, לימודים ונסיעות",
+    source: "fallback"
+  }
+];
 
-async function getCJAccessToken() {
-  const now = Date.now();
-  const tokenIsFresh =
-    cachedCJAccessToken && now - cachedCJAccessTokenAt < 23 * 60 * 60 * 1000;
-
-  if (tokenIsFresh) return cachedCJAccessToken;
-
-  const response = await fetch(
-    "https://developers.cjdropshipping.com/api2.0/v1/authentication/getAccessToken",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apiKey: CJ_API_KEY }),
-    }
+function getCJToken() {
+  return (
+    process.env.CJ_ACCESS_TOKEN ||
+    process.env.CJ_API_TOKEN ||
+    process.env.NEXT_PUBLIC_CJ_ACCESS_TOKEN ||
+    ""
   );
+}
 
-  const json = await response.json();
-  const accessToken =
-    json?.data?.accessToken ||
-    json?.data?.access_token ||
-    json?.result?.accessToken ||
-    json?.accessToken;
+function toNumber(value: any, fallback = 0): number {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+}
 
-  if (!accessToken) {
-    throw new Error(`CJ access token failed: ${JSON.stringify(json).slice(0, 500)}`);
+function getFirstImage(item: any): string {
+  if (typeof item?.productImage === "string" && item.productImage) {
+    return item.productImage;
   }
 
-  cachedCJAccessToken = accessToken;
-  cachedCJAccessTokenAt = now;
-  return accessToken;
+  if (typeof item?.image === "string" && item.image) {
+    return item.image;
+  }
+
+  if (Array.isArray(item?.productImageSet) && item.productImageSet.length > 0) {
+    const first = item.productImageSet[0];
+
+    if (typeof first === "string") {
+      return first;
+    }
+
+    if (typeof first?.image === "string") {
+      return first.image;
+    }
+
+    if (typeof first?.url === "string") {
+      return first.url;
+    }
+  }
+
+  if (Array.isArray(item?.images) && item.images.length > 0) {
+    const first = item.images[0];
+
+    if (typeof first === "string") {
+      return first;
+    }
+
+    if (typeof first?.url === "string") {
+      return first.url;
+    }
+  }
+
+  return "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800";
 }
 
-function priceToIls(value) {
-  const n = Number(value || 0);
-  if (!Number.isFinite(n) || n <= 0) return 99;
-  return Math.round(n * 3.7);
+function extractProductList(data: any): any[] {
+  if (Array.isArray(data?.data?.list)) {
+    return data.data.list;
+  }
+
+  if (Array.isArray(data?.data?.content)) {
+    return data.data.content;
+  }
+
+  if (Array.isArray(data?.data?.records)) {
+    return data.data.records;
+  }
+
+  if (Array.isArray(data?.data)) {
+    return data.data;
+  }
+
+  if (Array.isArray(data?.result?.list)) {
+    return data.result.list;
+  }
+
+  if (Array.isArray(data?.result)) {
+    return data.result;
+  }
+
+  if (Array.isArray(data?.products)) {
+    return data.products;
+  }
+
+  return [];
 }
 
-function normalizeCJItem(item, index = 0) {
-  const rawPrice =
-    item.sellPrice || item.price || item.productSellPrice || item.variantSellPrice;
-
-  const price = priceToIls(rawPrice);
-  const id = item.pid || item.productId || item.id || `cj-${Date.now()}-${index}`;
-  const title = item.productNameEn || item.productName || item.title || "CJ Product";
-  const category = item.categoryName || item.category || item.productType || "CJ";
-
+function mapCJProduct(item: any, index: number): BuyliProduct {
   return {
-    id: `cj-${id}`,
-    name: title,
-    nameEn: title,
-    nameAr: title,
-    price: `₪${price}`,
-    originalPrice: `₪${Math.round(price * 1.55)}`,
-    image:
-      item.productImage ||
-      item.productImageSet?.[0] ||
-      item.image ||
-      item.mainImage ||
-      "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=900",
-    description: `מוצר אמיתי מסונכרן מ-CJdropshipping. קטגוריה: ${category}.`,
-    descriptionEn: `Real synced product from CJdropshipping. Category: ${category}.`,
-    descriptionAr: `منتج حقيقي متزامن من CJdropshipping. الفئة: ${category}.`,
-    category,
-    categoryEn: category,
-    categoryAr: category,
-    rating: 4.6,
-    orders: Math.max(50, Number(item.variantsNum || item.stock || item.inventory || 100)),
-    badge: "CJ Live",
-    supplier: "CJdropshipping",
-    shipping: "CJ משלוח 7–18 ימים",
-    supplierProductId: id,
-    searchTags: [
-      title,
-      category,
-      "cj",
-      "cjdropshipping",
-      "live product",
-      "supplier",
-      "מוצר אמיתי",
-      "ספק",
-      "منتج حقيقي",
-      "مورد",
-    ],
+    id:
+      String(
+        item?.pid ||
+          item?.productId ||
+          item?.vid ||
+          item?.id ||
+          item?.sku ||
+          `cj-${index + 1}`
+      ),
+    name:
+      item?.productNameEn ||
+      item?.productName ||
+      item?.nameEn ||
+      item?.name ||
+      "מוצר ללא שם",
+    price: toNumber(
+      item?.sellPrice ||
+        item?.price ||
+        item?.listedPrice ||
+        item?.listPrice ||
+        item?.variantSellPrice ||
+        0,
+      0
+    ),
+    image: getFirstImage(item),
+    category:
+      item?.categoryName ||
+      item?.category ||
+      item?.categoryNameEn ||
+      "מוצרים",
+    description:
+      item?.description ||
+      item?.productDescription ||
+      item?.remark ||
+      "",
+    source: "cj"
   };
 }
 
-async function fetchCJProducts(keyword = "watch") {
-  const accessToken = await getCJAccessToken();
+export async function getProductsFromCJ(): Promise<BuyliProduct[]> {
+  const token = getCJToken();
 
-  const response = await fetch(
-    "https://developers.cjdropshipping.com/api2.0/v1/product/list",
-    {
-      method: "POST",
+  if (!token) {
+    console.warn("Missing CJ token. Using fallback products.");
+    return FALLBACK_PRODUCTS;
+  }
+
+  const url = `${CJ_BASE_URL}/product/list?pageNum=1&pageSize=20`;
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
       headers: {
         "Content-Type": "application/json",
-        "CJ-Access-Token": accessToken,
+        "CJ-Access-Token": token
       },
-      body: JSON.stringify({
-        pageNum: 1,
-        pageSize: 30,
-        productNameEn: keyword || "watch",
-      }),
+      cache: "no-store"
+    });
+
+    const data = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      console.error("CJ request failed:", data);
+      return FALLBACK_PRODUCTS;
     }
-  );
 
-  const json = await response.json();
-  const list = json?.data?.list || json?.data || json?.result?.list || [];
+    if (data?.success === false || data?.result === false) {
+      console.error("CJ returned error:", data);
+      return FALLBACK_PRODUCTS;
+    }
 
-  if (!Array.isArray(list) || list.length === 0) {
-    throw new Error(`CJ returned empty list: ${JSON.stringify(json).slice(0, 500)}`);
+    const list = extractProductList(data);
+
+    if (!Array.isArray(list) || list.length === 0) {
+      console.warn("CJ returned empty list:", data);
+      return FALLBACK_PRODUCTS;
+    }
+
+    return list.map(mapCJProduct);
+  } catch (error) {
+    console.error("CJ service error:", error);
+    return FALLBACK_PRODUCTS;
   }
-
-  return list.map(normalizeCJItem);
 }
 
-app.get("/", (_req, res) => {
-  res.json({
-    ok: true,
-    service: "Buyli Backend Proxy",
-    version: "V13",
-  });
-});
+export async function getProducts(): Promise<BuyliProduct[]> {
+  return getProductsFromCJ();
+}
 
-app.get("/products", async (req, res) => {
-  try {
-    const keyword = String(req.query.keyword || "watch");
-    const products = await fetchCJProducts(keyword);
+export async function getProductById(id: string): Promise<BuyliProduct | null> {
+  const products = await getProductsFromCJ();
 
-    res.json({
-      products,
-      source: "backend-cj-live",
-      count: products.length,
-      syncedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: error?.message || "Unknown backend error",
-      products: [],
-      source: "backend-error",
-      count: 0,
-      syncedAt: new Date().toISOString(),
-    });
-  }
-});
-
-app.post("/sync-products", async (req, res) => {
-  try {
-    const keyword = String(req.body?.keyword || "watch");
-    const products = await fetchCJProducts(keyword);
-
-    res.json({
-      products,
-      source: "backend-cj-live",
-      count: products.length,
-      syncedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: error?.message || "Unknown backend sync error",
-      products: [],
-      source: "backend-error",
-      count: 0,
-      syncedAt: new Date().toISOString(),
-    });
-  }
-});
-
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Buyli backend proxy V13 running on port ${port}`);
-});
+  return products.find((product) => product.id === id) || null;
+}
