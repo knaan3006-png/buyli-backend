@@ -1,16 +1,6 @@
-export type BuyliProduct = {
-  id: string;
-  name: string;
-  price: number;
-  image: string;
-  category: string;
-  description?: string;
-  source?: string;
-};
-
 const CJ_BASE_URL = "https://developers.cjdropshipping.com/api2.0/v1";
 
-const FALLBACK_PRODUCTS: BuyliProduct[] = [
+const FALLBACK_PRODUCTS = [
   {
     id: "fallback-1",
     name: "שעון חכם ספורטיבי",
@@ -49,12 +39,12 @@ function getCJToken() {
   );
 }
 
-function toNumber(value: any, fallback = 0): number {
+function toNumber(value, fallback = 0) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : fallback;
 }
 
-function getFirstImage(item: any): string {
+function getFirstImage(item) {
   if (typeof item?.productImage === "string" && item.productImage) {
     return item.productImage;
   }
@@ -94,7 +84,7 @@ function getFirstImage(item: any): string {
   return "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800";
 }
 
-function extractProductList(data: any): any[] {
+function extractProductList(data) {
   if (Array.isArray(data?.data?.list)) {
     return data.data.list;
   }
@@ -126,17 +116,16 @@ function extractProductList(data: any): any[] {
   return [];
 }
 
-function mapCJProduct(item: any, index: number): BuyliProduct {
+function mapCJProduct(item, index) {
   return {
-    id:
-      String(
-        item?.pid ||
-          item?.productId ||
-          item?.vid ||
-          item?.id ||
-          item?.sku ||
-          `cj-${index + 1}`
-      ),
+    id: String(
+      item?.pid ||
+        item?.productId ||
+        item?.vid ||
+        item?.id ||
+        item?.sku ||
+        `cj-${index + 1}`
+    ),
     name:
       item?.productNameEn ||
       item?.productName ||
@@ -167,7 +156,7 @@ function mapCJProduct(item: any, index: number): BuyliProduct {
   };
 }
 
-export async function getProductsFromCJ(): Promise<BuyliProduct[]> {
+async function getProductsFromCJ() {
   const token = getCJToken();
 
   if (!token) {
@@ -183,8 +172,7 @@ export async function getProductsFromCJ(): Promise<BuyliProduct[]> {
       headers: {
         "Content-Type": "application/json",
         "CJ-Access-Token": token
-      },
-      cache: "no-store"
+      }
     });
 
     const data = await response.json().catch(() => null);
@@ -213,12 +201,18 @@ export async function getProductsFromCJ(): Promise<BuyliProduct[]> {
   }
 }
 
-export async function getProducts(): Promise<BuyliProduct[]> {
+async function getProducts() {
   return getProductsFromCJ();
 }
 
-export async function getProductById(id: string): Promise<BuyliProduct | null> {
+async function getProductById(id) {
   const products = await getProductsFromCJ();
-
   return products.find((product) => product.id === id) || null;
 }
+
+module.exports = {
+  getProductsFromCJ,
+  getProducts,
+  getProductById,
+  FALLBACK_PRODUCTS
+};
