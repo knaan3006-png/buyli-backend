@@ -1,3 +1,13 @@
+const express = require("express");
+const cors = require("cors");
+
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+const PORT = process.env.PORT || 3000;
+
 const CJ_BASE_URL = "https://developers.cjdropshipping.com/api2.0/v1";
 
 const FALLBACK_PRODUCTS = [
@@ -56,62 +66,29 @@ function getFirstImage(item) {
   if (Array.isArray(item?.productImageSet) && item.productImageSet.length > 0) {
     const first = item.productImageSet[0];
 
-    if (typeof first === "string") {
-      return first;
-    }
-
-    if (typeof first?.image === "string") {
-      return first.image;
-    }
-
-    if (typeof first?.url === "string") {
-      return first.url;
-    }
+    if (typeof first === "string") return first;
+    if (typeof first?.image === "string") return first.image;
+    if (typeof first?.url === "string") return first.url;
   }
 
   if (Array.isArray(item?.images) && item.images.length > 0) {
     const first = item.images[0];
 
-    if (typeof first === "string") {
-      return first;
-    }
-
-    if (typeof first?.url === "string") {
-      return first.url;
-    }
+    if (typeof first === "string") return first;
+    if (typeof first?.url === "string") return first.url;
   }
 
   return "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800";
 }
 
 function extractProductList(data) {
-  if (Array.isArray(data?.data?.list)) {
-    return data.data.list;
-  }
-
-  if (Array.isArray(data?.data?.content)) {
-    return data.data.content;
-  }
-
-  if (Array.isArray(data?.data?.records)) {
-    return data.data.records;
-  }
-
-  if (Array.isArray(data?.data)) {
-    return data.data;
-  }
-
-  if (Array.isArray(data?.result?.list)) {
-    return data.result.list;
-  }
-
-  if (Array.isArray(data?.result)) {
-    return data.result;
-  }
-
-  if (Array.isArray(data?.products)) {
-    return data.products;
-  }
+  if (Array.isArray(data?.data?.list)) return data.data.list;
+  if (Array.isArray(data?.data?.content)) return data.data.content;
+  if (Array.isArray(data?.data?.records)) return data.data.records;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.result?.list)) return data.result.list;
+  if (Array.isArray(data?.result)) return data.result;
+  if (Array.isArray(data?.products)) return data.products;
 
   return [];
 }
@@ -201,18 +178,62 @@ async function getProductsFromCJ() {
   }
 }
 
-async function getProducts() {
-  return getProductsFromCJ();
-}
+app.get("/", function (req, res) {
+  res.json({
+    success: true,
+    message: "Buyli backend is running",
+    syncedAt: new Date().toISOString()
+  });
+});
 
-async function getProductById(id) {
-  const products = await getProductsFromCJ();
-  return products.find((product) => product.id === id) || null;
-}
+app.get("/api/products", async function (req, res) {
+  try {
+    const products = await getProductsFromCJ();
 
-module.exports = {
-  getProductsFromCJ,
-  getProducts,
-  getProductById,
-  FALLBACK_PRODUCTS
-};
+    res.json({
+      success: true,
+      source: products?.[0]?.source || "cj",
+      product: products,
+      products: products,
+      count: products.length,
+      syncedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    res.json({
+      success: true,
+      source: "fallback-error",
+      product: FALLBACK_PRODUCTS,
+      products: FALLBACK_PRODUCTS,
+      count: FALLBACK_PRODUCTS.length,
+      error: error?.message || "Unknown error",
+      syncedAt: new Date().toISOString()
+    });
+  }
+});
+
+app.get("/products", async function (req, res) {
+  try {
+    const products = await getProductsFromCJ();
+
+    res.json({
+      success: true,
+      product: products,
+      products: products,
+      count: products.length,
+      syncedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    res.json({
+      success: true,
+      product: FALLBACK_PRODUCTS,
+      products: FALLBACK_PRODUCTS,
+      count: FALLBACK_PRODUCTS.length,
+      error: error?.message || "Unknown error",
+      syncedAt: new Date().toISOString()
+    });
+  }
+});
+
+app.listen(PORT, function () {
+  console.log(`Buyli backend running on port ${PORT}`);
+});
