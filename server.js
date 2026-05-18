@@ -6,9 +6,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 const CJ_BASE_URL = "https://developers.cjdropshipping.com/api2.0/v1";
+
+let cachedAccessToken = null;
+let cachedAccessTokenTime = 0;
 
 const FALLBACK_PRODUCTS = [
   {
@@ -40,11 +43,11 @@ const FALLBACK_PRODUCTS = [
   }
 ];
 
-function getCJToken() {
+function getCJApiKey() {
   return (
+    process.env.CJ_API_KEY ||
     process.env.CJ_ACCESS_TOKEN ||
-    process.env.CJ_API_TOKEN ||
-    process.env.NEXT_PUBLIC_CJ_ACCESS_TOKEN ||
+    process.env.NEXT_PUBLIC_CJ_API_KEY ||
     ""
   );
 }
@@ -133,11 +136,68 @@ function mapCJProduct(item, index) {
   };
 }
 
-async function getProductsFromCJ() {
-  const token = getCJToken();
+async function getCJAccessToken() {
+  const apiKey = getCJApiKey();
 
-  if (!token) {
-    console.warn("Missing CJ token. Using fallback products.");
+  if (!apiKey) {
+    console.warn("Missing CJ_API_KEY. Using fallback products.");
+    return null;
+  }
+
+  const now = Date.now();
+
+  if (cachedAccessToken && now - cachedAccessTokenTime < 12 * 60 * 60 * 1000) {
+    return cachedAccessToken;
+  }
+
+  const url = `${CJ_BASE_URL}/authentication/getAccessToken`;
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        apiKey
+      })
+    });
+
+    const data = await response.json().catch(() => null);
+
+    if (!response.ok || data?.success === false || data?.result === false) {
+      console.error("CJ authentication failed:", data);
+      return null;
+    }
+
+    const accessToken =
+      data?.data?.accessToken ||
+      data?.data?.access_token ||
+      data?.accessToken ||
+      data?.access_token ||
+      "";
+
+    if (!accessToken) {
+      console.error("CJ authentication returned no access token:", data);
+      return null;
+    }
+
+    cachedAccessToken = accessToken;
+    cachedAccessTokenTime = Date.now();
+
+    console.log("CJ access token created successfully.");
+
+    return accessToken;
+  } catch (error) {
+    console.error("CJ authentication error:", error);
+    return null;
+  }
+}
+
+async function getProductsFromCJ() {
+  const accessToken = await getCJAccessToken();
+
+  if (!accessToken) {
     return FALLBACK_PRODUCTS;
   }
 
@@ -148,32 +208,27 @@ async function getProductsFromCJ() {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
-        "CJ-Access-Token": token
+        "CJ-Access-Token": accessToken
       }
     });
 
     const data = await response.json().catch(() => null);
 
-    if (!response.ok) {
-      console.error("CJ request failed:", data);
-      return FALLBACK_PRODUCTS;
-    }
-
-    if (data?.success === false || data?.result === false) {
-      console.error("CJ returned error:", data);
+    if (!response.ok || data?.success === false || data?.result === false) {
+      console.error("CJ product request failed:", data);
       return FALLBACK_PRODUCTS;
     }
 
     const list = extractProductList(data);
 
     if (!Array.isArray(list) || list.length === 0) {
-      console.warn("CJ returned empty list:", data);
+      console.warn("CJ returned empty product list:", data);
       return FALLBACK_PRODUCTS;
     }
 
     return list.map(mapCJProduct);
   } catch (error) {
-    console.error("CJ service error:", error);
+    console.error("CJ product service error:", error);
     return FALLBACK_PRODUCTS;
   }
 }
@@ -192,7 +247,7 @@ app.get("/api/products", async function (req, res) {
 
     res.json({
       success: true,
-      source: products?.[0]?.source || "cj",
+      source: products?.[0]?.source || "fallback",
       product: products,
       products: products,
       count: products.length,
@@ -217,6 +272,7 @@ app.get("/products", async function (req, res) {
 
     res.json({
       success: true,
+      source: products?.[0]?.source || "fallback",
       product: products,
       products: products,
       count: products.length,
@@ -225,6 +281,7 @@ app.get("/products", async function (req, res) {
   } catch (error) {
     res.json({
       success: true,
+      source: "fallback-error",
       product: FALLBACK_PRODUCTS,
       products: FALLBACK_PRODUCTS,
       count: FALLBACK_PRODUCTS.length,
