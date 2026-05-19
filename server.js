@@ -201,7 +201,7 @@ async function getProductsFromCJ() {
     return FALLBACK_PRODUCTS;
   }
 
-  const url = `${CJ_BASE_URL}/product/list?pageNum=1&pageSize=20`;
+ const url = `${CJ_BASE_URL}/product/list?pageNum=1&pageSize=100`;
 
   try {
     const response = await fetch(url, {
