@@ -94,6 +94,7 @@ const FALLBACK_PRODUCTS = [
     id: "fallback-1",
     source: "fallback",
     name: "תיק צד יוקרתי",
+    nameHe: "תיק צד יוקרתי",
     nameOriginal: "Premium Shoulder Bag",
     description: "תיק צד אלגנטי לשימוש יומיומי.",
     descriptionHe: "תיק צד אלגנטי ונוח לשימוש יומיומי, מתאים ליציאה, עבודה וקניות.",
@@ -101,19 +102,26 @@ const FALLBACK_PRODUCTS = [
     categoryHe: "תיקים",
     supplierPrice: 8.2,
     salePrice: 19.9,
+    price: 19.9,
+    oldPrice: 25.9,
     estimatedProfit: 7.7,
+    marginPercent: 38.6,
     image: "https://images.unsplash.com/photo-1590874103328-eac38a683ce7?w=900",
     images: [
       "https://images.unsplash.com/photo-1590874103328-eac38a683ce7?w=900",
       "https://images.unsplash.com/photo-1584917865442-de89df76afd3?w=900",
       "https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=900"
     ],
-    buyliScore: 88
+    buyliScore: 88,
+    isNew: true,
+    isSale: true,
+    translationMode: "fallback"
   },
   {
     id: "fallback-2",
     source: "fallback",
     name: "ארנק אלגנטי",
+    nameHe: "ארנק אלגנטי",
     nameOriginal: "Premium Wallet",
     description: "ארנק איכותי בעיצוב נקי.",
     descriptionHe: "ארנק איכותי עם עיצוב נקי ויוקרתי, מתאים לשימוש יומיומי.",
@@ -121,14 +129,20 @@ const FALLBACK_PRODUCTS = [
     categoryHe: "ארנקים",
     supplierPrice: 5.6,
     salePrice: 14.9,
+    price: 14.9,
+    oldPrice: 18.9,
     estimatedProfit: 5.5,
+    marginPercent: 36.9,
     image: "https://images.unsplash.com/photo-1627123424574-724758594e93?w=900",
     images: [
       "https://images.unsplash.com/photo-1627123424574-724758594e93?w=900",
       "https://images.unsplash.com/photo-1611010344444-5f9e4d86a6e1?w=900",
       "https://images.unsplash.com/photo-1601592996763-f05c9c80a7f4?w=900"
     ],
-    buyliScore: 84
+    buyliScore: 84,
+    isNew: true,
+    isSale: false,
+    translationMode: "fallback"
   }
 ];
 
@@ -145,6 +159,12 @@ function cleanText(value) {
 }
 
 function numberValue(value) {
+  if (typeof value === "string") {
+    const cleaned = value.replace("$", "").replace(",", "").trim();
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : 0;
+  }
+
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
 }
@@ -153,57 +173,65 @@ function categoryName(category) {
   return CATEGORY_HE[category] || category || "מוצרים";
 }
 
+function addImageToList(list, value) {
+  if (!value) return;
+
+  if (typeof value === "string") {
+    const parts = value
+      .split(/[,\s]+/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+
+    for (const part of parts) {
+      if (part.startsWith("http") && !part.includes(" ")) {
+        list.push(part);
+      }
+    }
+
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      addImageToList(list, item);
+    }
+    return;
+  }
+
+  if (typeof value === "object") {
+    addImageToList(list, value.url);
+    addImageToList(list, value.image);
+    addImageToList(list, value.img);
+    addImageToList(list, value.src);
+    addImageToList(list, value.productImage);
+    addImageToList(list, value.bigImage);
+    addImageToList(list, value.imageUrl);
+  }
+}
+
 function extractImages(product) {
   const results = [];
 
-  function add(value) {
-    if (!value) return;
+  addImageToList(results, product.image);
+  addImageToList(results, product.productImage);
+  addImageToList(results, product.bigImage);
+  addImageToList(results, product.productImageSet);
+  addImageToList(results, product.productImages);
+  addImageToList(results, product.images);
+  addImageToList(results, product.variantImages);
+  addImageToList(results, product.imageUrl);
+  addImageToList(results, product.mainImage);
 
-    if (typeof value === "string") {
-      const parts = value
-        .split(/[,\s]+/)
-        .map((x) => x.trim())
-        .filter(Boolean);
-
-      for (const part of parts) {
-        if (part.startsWith("http")) results.push(part);
-      }
-
-      return;
-    }
-
-    if (Array.isArray(value)) {
-      for (const item of value) add(item);
-      return;
-    }
-
-    if (typeof value === "object") {
-      add(value.url);
-      add(value.image);
-      add(value.img);
-      add(value.src);
-      add(value.productImage);
-      add(value.bigImage);
-    }
-  }
-
-  add(product.image);
-  add(product.productImage);
-  add(product.bigImage);
-  add(product.productImageSet);
-  add(product.productImages);
-  add(product.images);
-  add(product.variantImages);
-  add(product.description);
-
-  const html = String(product.description || "");
+  const html = String(product.description || product.productDescription || "");
   const imgRegex = /<img[^>]+src=["']([^"']+)["']/gi;
+
   let match;
   while ((match = imgRegex.exec(html))) {
-    add(match[1]);
+    addImageToList(results, match[1]);
   }
 
   const unique = [];
+
   for (const img of results) {
     if (!img.startsWith("http")) continue;
     if (img.includes(" ")) continue;
@@ -363,7 +391,9 @@ function calculatePrice(supplierPrice) {
 
   const salePrice = roundPrice(rawSalePrice);
   const estimatedProfit = Number((salePrice - cost - estimatedShipping - safetyBuffer).toFixed(2));
-  const marginPercent = Number(((estimatedProfit / salePrice) * 100).toFixed(1));
+  const marginPercent = salePrice > 0
+    ? Number(((estimatedProfit / salePrice) * 100).toFixed(1))
+    : 0;
 
   return {
     supplierPrice: Number(cost.toFixed(2)),
@@ -512,9 +542,19 @@ async function getProductsFromCJ() {
       item.productPrice ||
       item.variantSellPrice ||
       item.supplierPrice ||
+      item.productSellPrice ||
+      item.listPrice ||
       0;
 
-    return {
+    const image =
+      item.image ||
+      item.productImage ||
+      item.bigImage ||
+      item.imageUrl ||
+      item.mainImage ||
+      "";
+
+    const product = {
       id: String(item.pid || item.id || item.productId || `cj-${index}`),
       source: "cj",
       name,
@@ -522,10 +562,22 @@ async function getProductsFromCJ() {
       price: numberValue(price),
       category,
       description: item.description || item.productDescription || "",
-      image: item.image || item.productImage || item.bigImage || "",
-      images: extractImages(item),
+      image,
+      productImage: item.productImage,
+      bigImage: item.bigImage,
+      images: [],
       raw: item
     };
+
+    const images = extractImages({
+      ...item,
+      image,
+      description: product.description
+    });
+
+    product.images = images.length ? images : image ? [image] : [];
+
+    return product;
   });
 }
 
@@ -535,6 +587,22 @@ async function getProductsFromAliExpress() {
 
 async function getProductsFromShein() {
   return [];
+}
+
+function prepareFallbackProducts() {
+  return FALLBACK_PRODUCTS.map((product, index) => ({
+    ...product,
+    name: product.nameHe || product.name,
+    nameHe: product.nameHe || product.name,
+    categoryHe: product.categoryHe || categoryName(product.category),
+    descriptionHe: product.descriptionHe || product.description,
+    price: product.salePrice,
+    oldPrice: roundPrice(product.salePrice * 1.28),
+    isNew: index < 10,
+    isSale: index % 3 === 0,
+    translationMode: "fallback",
+    buyliScore: product.buyliScore || 75
+  }));
 }
 
 async function buildProductEngine() {
@@ -557,7 +625,7 @@ async function buildProductEngine() {
     const price = numberValue(product.price);
 
     if (!price || price <= 0) return false;
-    if (!images.length) return false;
+    if (!images.length && !product.image) return false;
 
     return true;
   });
@@ -567,7 +635,16 @@ async function buildProductEngine() {
   for (let index = 0; index < clean.length; index++) {
     const product = clean[index];
 
-    const images = product.images?.length ? product.images : extractImages(product);
+    const imagesFromProduct = product.images?.length
+      ? product.images
+      : extractImages(product);
+
+    const images = imagesFromProduct.length
+      ? imagesFromProduct
+      : product.image
+      ? [product.image]
+      : [];
+
     const image = images[0] || product.image;
 
     const pricing = calculatePrice(product.price);
@@ -610,10 +687,12 @@ async function buildProductEngine() {
 
   finalProducts.sort((a, b) => b.buyliScore - a.buyliScore);
 
-  cachedProducts = finalProducts;
+  const safeProducts = finalProducts.length ? finalProducts : prepareFallbackProducts();
+
+  cachedProducts = safeProducts;
   cachedProductsTime = now;
 
-  return finalProducts;
+  return safeProducts;
 }
 
 app.get("/", (req, res) => {
@@ -658,12 +737,24 @@ app.get("/api/products", async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Buyli Product Engine failed",
+    const fallback = prepareFallbackProducts();
+
+    res.status(200).json({
+      success: true,
+      source: "buyli-v8-fallback",
+      count: fallback.length,
+      products: fallback,
+      product: fallback,
       error: error.message,
-      products: FALLBACK_PRODUCTS,
-      product: FALLBACK_PRODUCTS
+      engine: {
+        pricing: true,
+        filtering: true,
+        gallery: true,
+        buyliScore: true,
+        aiTranslation: false,
+        aliExpressReady: true,
+        sheinReady: true
+      }
     });
   }
 });
