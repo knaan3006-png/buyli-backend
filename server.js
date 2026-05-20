@@ -141,6 +141,8 @@ function addImage(list, value) {
       if (cleanUrl.includes("avatar")) continue;
       if (cleanUrl.includes("profile")) continue;
       if (cleanUrl.includes("user")) continue;
+      if (cleanUrl.includes("facebook")) continue;
+      if (cleanUrl.includes("instagram")) continue;
 
       list.push(cleanUrl);
     }
@@ -202,15 +204,18 @@ function extractImages(product) {
     if (cleanUrl.includes(" ")) continue;
     if (cleanUrl.length < 20) continue;
 
-    if (
+    const looksLikeImage =
       cleanUrl.includes(".jpg") ||
       cleanUrl.includes(".jpeg") ||
       cleanUrl.includes(".png") ||
       cleanUrl.includes(".webp") ||
-      cleanUrl.includes("cjdropshipping.com")
-    ) {
-      if (!unique.includes(cleanUrl)) unique.push(cleanUrl);
-    }
+      cleanUrl.includes("cjdropshipping.com") ||
+      cleanUrl.includes("oss-cf.cjdropshipping.com") ||
+      cleanUrl.includes("cf.cjdropshipping.com");
+
+    if (!looksLikeImage) continue;
+
+    if (!unique.includes(cleanUrl)) unique.push(cleanUrl);
   }
 
   return unique.slice(0, 8);
@@ -228,7 +233,10 @@ function findPrice(product) {
     product.nowPrice,
     product.originalPrice,
     product.lowestSellPrice,
-    product.highestSellPrice
+    product.highestSellPrice,
+    product.minPrice,
+    product.maxPrice,
+    product.startingPrice
   ];
 
   for (const value of directFields) {
@@ -267,7 +275,6 @@ function findPrice(product) {
   if (!candidates.length) return 0;
 
   candidates.sort((a, b) => a - b);
-
   return candidates[0];
 }
 
@@ -388,9 +395,7 @@ async function translateWithAI(product) {
 
 function roundPrice(price) {
   if (!price || price <= 0) return 0;
-
   const rounded = Math.ceil(price) - 0.1;
-
   return Number(Math.max(rounded, 4.9).toFixed(2));
 }
 
@@ -527,6 +532,27 @@ function parseCJList(data) {
   return [];
 }
 
+async function fetchCJListByPath(token, path) {
+  const url = `${CJ_BASE_URL}${path}`;
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "CJ-Access-Token": token
+    }
+  });
+
+  const data = await response.json();
+
+  return {
+    url,
+    status: response.status,
+    data,
+    list: parseCJList(data)
+  };
+}
+
 async function getProductsFromCJ() {
   const token = await getCJAccessToken();
 
@@ -536,91 +562,106 @@ async function getProductsFromCJ() {
       debug: {
         source: "cj",
         ok: false,
-        reason: "Missing CJ token"
+        reason: "Missing CJ token",
+        hasCJ_API_KEY: Boolean(process.env.CJ_API_KEY),
+        hasCJ_ACCESS_TOKEN: Boolean(process.env.CJ_ACCESS_TOKEN)
       }
     };
   }
 
-  const url = `${CJ_BASE_URL}/product/list?pageNum=1&pageSize=100`;
+  const attempts = [
+    "/product/list?pageNum=1&pageSize=100",
+    "/product/list?pageNum=1&pageSize=50",
+    "/product/list?page=1&pageSize=100",
+    "/product/list?current=1&size=100"
+  ];
 
-  try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        "CJ-Access-Token": token
-      }
-    });
+  const attemptResults = [];
+  let selectedList = [];
 
-    const data = await response.json();
-    const list = parseCJList(data);
+  for (const path of attempts) {
+    try {
+      const result = await fetchCJListByPath(token, path);
 
-    const products = list.map((item, index) => {
-      const name =
-        item.productName ||
-        item.name ||
-        item.productTitle ||
-        item.title ||
-        `CJ Product ${index + 1}`;
-
-      const category =
-        item.categoryName ||
-        item.category ||
-        item.productCategoryName ||
-        item.categoryFirstName ||
-        "מוצרים";
-
-      const price = findPrice(item);
-
-      const image =
-        item.image ||
-        item.productImage ||
-        item.bigImage ||
-        item.imageUrl ||
-        item.mainImage ||
-        "";
-
-      const description = item.description || item.productDescription || "";
-
-      const images = extractImages({
-        ...item,
-        image,
-        description
+      attemptResults.push({
+        url: result.url,
+        status: result.status,
+        rawCode: result.data?.code,
+        rawMessage: result.data?.message || result.data?.msg,
+        listCount: result.list.length,
+        dataKeys: result.data ? Object.keys(result.data) : []
       });
 
-      return {
-        id: String(item.pid || item.id || item.productId || `cj-${index}`),
-        source: "cj",
-        name,
-        nameOriginal: name,
-        price,
-        category,
-        description,
-        image: images[0] || image,
-        images,
-        raw: item
-      };
+      if (result.list.length) {
+        selectedList = result.list;
+        break;
+      }
+    } catch (error) {
+      attemptResults.push({
+        path,
+        error: error.message
+      });
+    }
+  }
+
+  const products = selectedList.map((item, index) => {
+    const name =
+      item.productName ||
+      item.name ||
+      item.productTitle ||
+      item.title ||
+      `CJ Product ${index + 1}`;
+
+    const category =
+      item.categoryName ||
+      item.category ||
+      item.productCategoryName ||
+      item.categoryFirstName ||
+      "מוצרים";
+
+    const price = findPrice(item);
+
+    const image =
+      item.image ||
+      item.productImage ||
+      item.bigImage ||
+      item.imageUrl ||
+      item.mainImage ||
+      "";
+
+    const description = item.description || item.productDescription || "";
+
+    const images = extractImages({
+      ...item,
+      image,
+      description
     });
 
     return {
-      products,
-      debug: {
-        source: "cj",
-        ok: true,
-        rawCount: list.length,
-        mappedCount: products.length
-      }
+      id: String(item.pid || item.id || item.productId || `cj-${index}`),
+      source: "cj",
+      name,
+      nameOriginal: name,
+      price,
+      category,
+      description,
+      image: images[0] || image,
+      images,
+      raw: item
     };
-  } catch (error) {
-    return {
-      products: [],
-      debug: {
-        source: "cj",
-        ok: false,
-        reason: error.message
-      }
-    };
-  }
+  });
+
+  return {
+    products,
+    debug: {
+      source: "cj",
+      ok: true,
+      attempts: attemptResults,
+      rawCount: selectedList.length,
+      mappedCount: products.length,
+      tokenStart: String(token).slice(0, 8)
+    }
+  };
 }
 
 async function getProductsFromAliExpress() {
@@ -709,10 +750,7 @@ async function buildProductEngine() {
   for (let index = 0; index < clean.length; index++) {
     const product = clean[index];
 
-    const images = product.images?.length
-      ? product.images
-      : extractImages(product);
-
+    const images = product.images?.length ? product.images : extractImages(product);
     const image = images[0] || product.image;
 
     const pricing = calculatePrice(product.price);
@@ -773,15 +811,15 @@ app.get("/", (req, res) => {
   res.json({
     success: true,
     app: "Buyli Backend",
-    version: "V8 Product Engine Clean",
-    endpoints: ["/api/products", "/api/health"]
+    version: "V8 Product Engine Clean Debug",
+    endpoints: ["/api/products", "/api/health", "/api/debug/cj"]
   });
 });
 
 app.get("/api/health", (req, res) => {
   res.json({
     success: true,
-    version: "V8-clean",
+    version: "V8-clean-debug",
     cjConfigured: Boolean(process.env.CJ_API_KEY || process.env.CJ_ACCESS_TOKEN),
     aiConfigured: Boolean(process.env.OPENAI_API_KEY),
     aiEnabled: process.env.ENABLE_AI_TRANSLATION === "true",
@@ -791,15 +829,85 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+app.get("/api/debug/cj", async (req, res) => {
+  try {
+    cachedAccessToken = null;
+    cachedAccessTokenTime = 0;
+
+    const token = await getCJAccessToken();
+
+    if (!token) {
+      return res.json({
+        success: false,
+        message: "No CJ token",
+        hasCJ_API_KEY: Boolean(process.env.CJ_API_KEY),
+        hasCJ_ACCESS_TOKEN: Boolean(process.env.CJ_ACCESS_TOKEN)
+      });
+    }
+
+    const attempts = [
+      "/product/list?pageNum=1&pageSize=100",
+      "/product/list?pageNum=1&pageSize=50",
+      "/product/list?page=1&pageSize=100",
+      "/product/list?current=1&size=100"
+    ];
+
+    const results = [];
+
+    for (const path of attempts) {
+      try {
+        const result = await fetchCJListByPath(token, path);
+
+        results.push({
+          url: result.url,
+          status: result.status,
+          code: result.data?.code,
+          message: result.data?.message || result.data?.msg,
+          dataKeys: result.data ? Object.keys(result.data) : [],
+          listCount: result.list.length,
+          sample: result.list?.[0] || null,
+          raw: result.data
+        });
+      } catch (error) {
+        results.push({
+          path,
+          error: error.message
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      hasToken: Boolean(token),
+      tokenStart: String(token).slice(0, 8),
+      hasCJ_API_KEY: Boolean(process.env.CJ_API_KEY),
+      hasCJ_ACCESS_TOKEN: Boolean(process.env.CJ_ACCESS_TOKEN),
+      attempts: results
+    });
+  } catch (error) {
+    res.json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 app.get("/api/products", async (req, res) => {
   try {
+    const force = req.query.force === "true";
+
+    if (force) {
+      cachedProducts = null;
+      cachedProductsTime = 0;
+    }
+
     const result = await buildProductEngine();
     const products = result.products;
 
     if (!products.length) {
       return res.status(200).json({
         success: false,
-        source: "buyli-v8-clean",
+        source: "buyli-v8-clean-debug",
         count: 0,
         products: [],
         product: [],
@@ -820,7 +928,7 @@ app.get("/api/products", async (req, res) => {
 
     res.json({
       success: true,
-      source: "buyli-v8-clean",
+      source: "buyli-v8-clean-debug",
       count: products.length,
       products,
       product: products,
@@ -838,7 +946,7 @@ app.get("/api/products", async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      source: "buyli-v8-clean",
+      source: "buyli-v8-clean-debug",
       count: 0,
       products: [],
       product: [],
@@ -850,5 +958,5 @@ app.get("/api/products", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Buyli V8 clean backend running on port ${PORT}`);
+  console.log(`Buyli V8 clean debug backend running on port ${PORT}`);
 });
