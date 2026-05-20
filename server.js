@@ -7,290 +7,667 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
-
 const CJ_BASE_URL = "https://developers.cjdropshipping.com/api2.0/v1";
 
 let cachedAccessToken = null;
 let cachedAccessTokenTime = 0;
+let cachedProducts = null;
+let cachedProductsTime = 0;
+
+const CACHE_TIME_MS = 1000 * 60 * 20;
+
+const BLOCKED_WORDS = [
+  "axe",
+  "knife",
+  "self-defense",
+  "weapon",
+  "tactical",
+  "gun",
+  "blade",
+  "pepper",
+  "sword",
+  "crossbow",
+  "machete",
+  "dagger",
+  "ammo",
+  "bullet",
+  "rifle",
+  "pistol",
+  "airsoft",
+  "vape",
+  "nicotine",
+  "cigarette",
+  "cbd",
+  "thc",
+  "drug",
+  "adult",
+  "sex toy"
+];
+
+const CATEGORY_HE = {
+  "Men's Jackets": "ז׳קטים לגברים",
+  Boxers: "בוקסרים",
+  "Suits & Sets": "חליפות וסטים",
+  "Lady Dresses": "שמלות נשים",
+  "Camping & Hiking": "קמפינג וטיולים",
+  "Women's Short-sleeved Shirt": "חולצות נשים",
+  "Blouses & Shirts": "חולצות",
+  Wallets: "ארנקים",
+  "Bracelets & Bangles": "צמידים",
+  Rompers: "אוברולים",
+  "Necklace & Pendants": "שרשראות",
+  "Wide Leg Pants": "מכנסיים רחבים",
+  "Men's Suits": "חליפות גברים",
+  Women: "נשים",
+  Men: "גברים",
+  "Men's Underwear": "הלבשה תחתונה לגברים",
+  "Women's Clothing": "בגדי נשים",
+  "Men's Clothing": "בגדי גברים",
+  "Home & Garden": "בית וגינה",
+  Jewelry: "תכשיטים",
+  Watches: "שעונים",
+  "Consumer Electronics": "אלקטרוניקה",
+  "Health & Beauty": "יופי וטיפוח",
+  Shoes: "נעליים",
+  Bags: "תיקים",
+  "Sports & Outdoors": "ספורט וטיולים",
+  "Home Office Storage": "אחסון לבית ולמשרד",
+  Drinkware: "כלי שתייה",
+  "Home Textile": "טקסטיל לבית",
+  "Winter Accessories": "אביזרי חורף",
+  Sweaters: "סוודרים",
+  "Casual Pants": "מכנסיים",
+  Blazers: "בלייזרים",
+  Dresses: "שמלות",
+  "T-Shirts": "חולצות",
+  Earrings: "עגילים",
+  "Silver Jewelry": "תכשיטי כסף",
+  "Storage Bags & Cases": "תיקי אחסון",
+  "Men Sweaters": "סוודרים לגברים",
+  "Men Jackets": "ז׳קטים לגברים",
+  "Women's Short Sleeved Shirts": "חולצות נשים",
+  "Wall-mounted Storage": "אחסון לקיר"
+};
 
 const FALLBACK_PRODUCTS = [
   {
     id: "fallback-1",
-    name: "שעון חכם ספורטיבי",
-    price: 89,
-    image: "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800",
-    category: "גאדג׳טים",
-    description: "שעון חכם בעיצוב מודרני עם מסך איכותי",
-    source: "fallback"
+    source: "fallback",
+    name: "תיק צד יוקרתי",
+    nameOriginal: "Premium Shoulder Bag",
+    description: "תיק צד אלגנטי לשימוש יומיומי.",
+    descriptionHe: "תיק צד אלגנטי ונוח לשימוש יומיומי, מתאים ליציאה, עבודה וקניות.",
+    category: "Bags",
+    categoryHe: "תיקים",
+    supplierPrice: 8.2,
+    salePrice: 19.9,
+    estimatedProfit: 7.7,
+    image: "https://images.unsplash.com/photo-1590874103328-eac38a683ce7?w=900",
+    images: [
+      "https://images.unsplash.com/photo-1590874103328-eac38a683ce7?w=900",
+      "https://images.unsplash.com/photo-1584917865442-de89df76afd3?w=900",
+      "https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=900"
+    ],
+    buyliScore: 88
   },
   {
     id: "fallback-2",
-    name: "אוזניות Bluetooth אלחוטיות",
-    price: 69,
-    image: "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800",
-    category: "אלקטרוניקה",
-    description: "אוזניות אלחוטיות לשימוש יומיומי",
-    source: "fallback"
-  },
-  {
-    id: "fallback-3",
-    name: "תיק גב יומיומי",
-    price: 79,
-    image: "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=800",
-    category: "אופנה",
-    description: "תיק גב נוח לעבודה, לימודים ונסיעות",
-    source: "fallback"
+    source: "fallback",
+    name: "ארנק אלגנטי",
+    nameOriginal: "Premium Wallet",
+    description: "ארנק איכותי בעיצוב נקי.",
+    descriptionHe: "ארנק איכותי עם עיצוב נקי ויוקרתי, מתאים לשימוש יומיומי.",
+    category: "Wallets",
+    categoryHe: "ארנקים",
+    supplierPrice: 5.6,
+    salePrice: 14.9,
+    estimatedProfit: 5.5,
+    image: "https://images.unsplash.com/photo-1627123424574-724758594e93?w=900",
+    images: [
+      "https://images.unsplash.com/photo-1627123424574-724758594e93?w=900",
+      "https://images.unsplash.com/photo-1611010344444-5f9e4d86a6e1?w=900",
+      "https://images.unsplash.com/photo-1601592996763-f05c9c80a7f4?w=900"
+    ],
+    buyliScore: 84
   }
 ];
 
-function getCJApiKey() {
-  return (
-    process.env.CJ_API_KEY ||
-    process.env.CJ_ACCESS_TOKEN ||
-    process.env.NEXT_PUBLIC_CJ_API_KEY ||
-    ""
-  );
+function cleanText(value) {
+  if (!value) return "";
+  return String(value)
+    .replace(/<script[^>]*>.*?<\/script>/gis, " ")
+    .replace(/<style[^>]*>.*?<\/style>/gis, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function toNumber(value, fallback = 0) {
-  const numberValue = Number(value);
-  return Number.isFinite(numberValue) ? numberValue : fallback;
+function numberValue(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 }
 
-function getFirstImage(item) {
-  if (typeof item?.productImage === "string" && item.productImage) {
-    return item.productImage;
-  }
-
-  if (typeof item?.image === "string" && item.image) {
-    return item.image;
-  }
-
-  if (Array.isArray(item?.productImageSet) && item.productImageSet.length > 0) {
-    const first = item.productImageSet[0];
-
-    if (typeof first === "string") return first;
-    if (typeof first?.image === "string") return first.image;
-    if (typeof first?.url === "string") return first.url;
-  }
-
-  if (Array.isArray(item?.images) && item.images.length > 0) {
-    const first = item.images[0];
-
-    if (typeof first === "string") return first;
-    if (typeof first?.url === "string") return first.url;
-  }
-
-  return "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800";
+function categoryName(category) {
+  return CATEGORY_HE[category] || category || "מוצרים";
 }
 
-function extractProductList(data) {
-  if (Array.isArray(data?.data?.list)) return data.data.list;
-  if (Array.isArray(data?.data?.content)) return data.data.content;
-  if (Array.isArray(data?.data?.records)) return data.data.records;
-  if (Array.isArray(data?.data)) return data.data;
-  if (Array.isArray(data?.result?.list)) return data.result.list;
-  if (Array.isArray(data?.result)) return data.result;
-  if (Array.isArray(data?.products)) return data.products;
+function extractImages(product) {
+  const results = [];
+
+  function add(value) {
+    if (!value) return;
+
+    if (typeof value === "string") {
+      const parts = value
+        .split(/[,\s]+/)
+        .map((x) => x.trim())
+        .filter(Boolean);
+
+      for (const part of parts) {
+        if (part.startsWith("http")) results.push(part);
+      }
+
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) add(item);
+      return;
+    }
+
+    if (typeof value === "object") {
+      add(value.url);
+      add(value.image);
+      add(value.img);
+      add(value.src);
+      add(value.productImage);
+      add(value.bigImage);
+    }
+  }
+
+  add(product.image);
+  add(product.productImage);
+  add(product.bigImage);
+  add(product.productImageSet);
+  add(product.productImages);
+  add(product.images);
+  add(product.variantImages);
+  add(product.description);
+
+  const html = String(product.description || "");
+  const imgRegex = /<img[^>]+src=["']([^"']+)["']/gi;
+  let match;
+  while ((match = imgRegex.exec(html))) {
+    add(match[1]);
+  }
+
+  const unique = [];
+  for (const img of results) {
+    if (!img.startsWith("http")) continue;
+    if (img.includes(" ")) continue;
+    if (!unique.includes(img)) unique.push(img);
+  }
+
+  return unique.slice(0, 8);
+}
+
+function isBlocked(product) {
+  const text = [
+    product.name,
+    product.nameOriginal,
+    product.productName,
+    product.category,
+    product.categoryName,
+    product.description
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return BLOCKED_WORDS.some((word) => text.includes(word));
+}
+
+function smartHebrewName(originalName, category) {
+  const name = String(originalName || "").toLowerCase();
+  const cat = String(category || "").toLowerCase();
+
+  if (name.includes("dress") || cat.includes("dress")) return "שמלת נשים אלגנטית";
+  if (name.includes("jacket") || cat.includes("jacket")) return "ז׳קט אופנתי";
+  if (name.includes("shirt") || name.includes("blouse") || cat.includes("shirt")) return "חולצה אופנתית";
+  if (name.includes("t-shirt") || name.includes("tee")) return "טי־שירט אופנתית";
+  if (name.includes("pants") || name.includes("trousers")) return "מכנסיים אופנתיים";
+  if (name.includes("suit") || cat.includes("suit")) return "סט לבוש אלגנטי";
+  if (name.includes("boxer") || cat.includes("boxer")) return "בוקסר איכותי לגברים";
+  if (name.includes("wallet") || cat.includes("wallet")) return "ארנק אלגנטי";
+  if (name.includes("bracelet") || cat.includes("bracelet")) return "צמיד מעוצב";
+  if (name.includes("necklace") || name.includes("pendant")) return "שרשרת מעוצבת";
+  if (name.includes("earring")) return "עגילים מעוצבים";
+  if (name.includes("bag") || name.includes("backpack")) return "תיק אופנתי";
+  if (name.includes("shoe") || name.includes("sneaker") || cat.includes("shoe")) return "נעליים אופנתיות";
+  if (name.includes("watch")) return "שעון אלגנטי";
+  if (name.includes("cup") || name.includes("mug")) return "כוס מעוצבת";
+  if (name.includes("storage") || cat.includes("storage")) return "פתרון אחסון לבית";
+  if (name.includes("blanket")) return "שמיכה נעימה לבית";
+  if (name.includes("camping") || name.includes("hiking")) return "מוצר לטיולים וקמפינג";
+  if (cat.includes("jewelry")) return "תכשיט מעוצב";
+  if (cat.includes("electronics")) return "גאדג׳ט שימושי";
+  if (cat.includes("beauty")) return "מוצר טיפוח ויופי";
+
+  return categoryName(category);
+}
+
+function smartHebrewDescription(originalName, category) {
+  const catHe = categoryName(category);
+  const productHe = smartHebrewName(originalName, category);
+
+  return `${productHe} מקטגוריית ${catHe}. מוצר שנבחר ל־Buyli לאחר סינון איכות, תמונות ומחיר. מתאים להזמנה אונליין עם מחיר מכירה הכולל רווח וחוויית קנייה נוחה.`;
+}
+
+async function translateWithAI(product) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const aiEnabled = process.env.ENABLE_AI_TRANSLATION === "true";
+
+  if (!apiKey || !aiEnabled) {
+    return {
+      nameHe: smartHebrewName(product.nameOriginal, product.category),
+      descriptionHe: smartHebrewDescription(product.nameOriginal, product.category),
+      categoryHe: categoryName(product.category),
+      translationMode: "smart-local"
+    };
+  }
+
+  try {
+    const prompt = `
+Translate this ecommerce product to natural Hebrew.
+Return only JSON with:
+nameHe, descriptionHe, categoryHe.
+
+Original name: ${product.nameOriginal}
+Category: ${product.category}
+Description: ${product.description}
+`;
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You translate ecommerce products to Hebrew. Keep names short, accurate and suitable for an Israeli shopping app. Return valid JSON only."
+          },
+          { role: "user", content: prompt }
+        ],
+        temperature: 0.2
+      })
+    });
+
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content || "";
+    const jsonText = text.replace(/```json/g, "").replace(/```/g, "").trim();
+    const parsed = JSON.parse(jsonText);
+
+    return {
+      nameHe: parsed.nameHe || smartHebrewName(product.nameOriginal, product.category),
+      descriptionHe:
+        parsed.descriptionHe || smartHebrewDescription(product.nameOriginal, product.category),
+      categoryHe: parsed.categoryHe || categoryName(product.category),
+      translationMode: "ai"
+    };
+  } catch (error) {
+    return {
+      nameHe: smartHebrewName(product.nameOriginal, product.category),
+      descriptionHe: smartHebrewDescription(product.nameOriginal, product.category),
+      categoryHe: categoryName(product.category),
+      translationMode: "smart-local"
+    };
+  }
+}
+
+function roundPrice(price) {
+  if (!price || price <= 0) return 0;
+  const rounded = Math.ceil(price) - 0.1;
+  return Number(Math.max(rounded, 4.9).toFixed(2));
+}
+
+function calculatePrice(supplierPrice) {
+  const cost = numberValue(supplierPrice);
+
+  if (!cost || cost <= 0) {
+    return {
+      supplierPrice: 0,
+      salePrice: 0,
+      estimatedProfit: 0,
+      marginPercent: 0
+    };
+  }
+
+  let multiplier = 1.55;
+
+  if (cost <= 5) multiplier = 2.6;
+  else if (cost <= 15) multiplier = 2.1;
+  else if (cost <= 40) multiplier = 1.75;
+
+  const estimatedShipping = cost < 12 ? 3.5 : cost < 35 ? 5.5 : 8;
+  const paymentFeePercent = 0.035;
+  const safetyBuffer = 1.5;
+
+  const rawSalePrice =
+    (cost + estimatedShipping + safetyBuffer) * multiplier * (1 + paymentFeePercent);
+
+  const salePrice = roundPrice(rawSalePrice);
+  const estimatedProfit = Number((salePrice - cost - estimatedShipping - safetyBuffer).toFixed(2));
+  const marginPercent = Number(((estimatedProfit / salePrice) * 100).toFixed(1));
+
+  return {
+    supplierPrice: Number(cost.toFixed(2)),
+    salePrice,
+    estimatedProfit,
+    marginPercent
+  };
+}
+
+function calculateBuyliScore(product) {
+  let score = 50;
+
+  if (product.images?.length >= 4) score += 15;
+  else if (product.images?.length >= 2) score += 8;
+
+  if (product.estimatedProfit >= 8) score += 15;
+  else if (product.estimatedProfit >= 4) score += 8;
+
+  if (product.salePrice >= 9 && product.salePrice <= 60) score += 10;
+  if (product.nameHe && product.nameHe.length <= 35) score += 5;
+  if (product.descriptionHe && product.descriptionHe.length > 40) score += 5;
+  if (product.source === "cj") score += 5;
+
+  if (product.salePrice > 120) score -= 10;
+  if (product.images?.length <= 1) score -= 8;
+  if (product.estimatedProfit <= 2) score -= 15;
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+async function getCJAccessToken() {
+  const now = Date.now();
+
+  if (cachedAccessToken && now - cachedAccessTokenTime < 1000 * 60 * 60 * 20) {
+    return cachedAccessToken;
+  }
+
+  const cjApiKey = process.env.CJ_API_KEY;
+  const cjAccessToken = process.env.CJ_ACCESS_TOKEN;
+
+  if (cjAccessToken) {
+    cachedAccessToken = cjAccessToken;
+    cachedAccessTokenTime = now;
+    return cachedAccessToken;
+  }
+
+  if (!cjApiKey) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(`${CJ_BASE_URL}/authentication/getAccessToken`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "CJ-Access-Token": cjApiKey
+      }
+    });
+
+    const data = await response.json();
+
+    const token =
+      data?.data?.accessToken ||
+      data?.data?.token ||
+      data?.accessToken ||
+      data?.token ||
+      null;
+
+    if (token) {
+      cachedAccessToken = token;
+      cachedAccessTokenTime = now;
+      return token;
+    }
+
+    cachedAccessToken = cjApiKey;
+    cachedAccessTokenTime = now;
+    return cachedAccessToken;
+  } catch (error) {
+    cachedAccessToken = cjApiKey;
+    cachedAccessTokenTime = now;
+    return cachedAccessToken;
+  }
+}
+
+function parseCJList(data) {
+  const candidates = [
+    data?.data?.list,
+    data?.data?.content,
+    data?.data?.products,
+    data?.data,
+    data?.result?.list,
+    data?.result,
+    data?.products,
+    data?.product
+  ];
+
+  for (const item of candidates) {
+    if (Array.isArray(item)) return item;
+  }
 
   return [];
 }
 
-function mapCJProduct(item, index) {
-  return {
-    id: String(
-      item?.pid ||
-        item?.productId ||
-        item?.vid ||
-        item?.id ||
-        item?.sku ||
-        `cj-${index + 1}`
-    ),
-    name:
-      item?.productNameEn ||
-      item?.productName ||
-      item?.nameEn ||
-      item?.name ||
-      "מוצר ללא שם",
-    price: toNumber(
-      item?.sellPrice ||
-        item?.price ||
-        item?.listedPrice ||
-        item?.listPrice ||
-        item?.variantSellPrice ||
-        0,
-      0
-    ),
-    image: getFirstImage(item),
-    category:
-      item?.categoryName ||
-      item?.category ||
-      item?.categoryNameEn ||
-      "מוצרים",
-    description:
-      item?.description ||
-      item?.productDescription ||
-      item?.remark ||
-      "",
-    source: "cj"
-  };
-}
+async function getProductsFromCJ() {
+  const token = await getCJAccessToken();
 
-async function getCJAccessToken() {
-  const apiKey = getCJApiKey();
-
-  if (!apiKey) {
-    console.warn("Missing CJ_API_KEY. Using fallback products.");
-    return null;
+  if (!token) {
+    return FALLBACK_PRODUCTS;
   }
 
+  const url = `${CJ_BASE_URL}/product/list?pageNum=1&pageSize=100`;
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "CJ-Access-Token": token
+    }
+  });
+
+  const data = await response.json();
+  const list = parseCJList(data);
+
+  if (!list.length) {
+    return FALLBACK_PRODUCTS;
+  }
+
+  return list.map((item, index) => {
+    const name =
+      item.productName ||
+      item.name ||
+      item.productTitle ||
+      item.title ||
+      `CJ Product ${index + 1}`;
+
+    const category =
+      item.categoryName ||
+      item.category ||
+      item.productCategoryName ||
+      item.categoryFirstName ||
+      "מוצרים";
+
+    const price =
+      item.sellPrice ||
+      item.price ||
+      item.productPrice ||
+      item.variantSellPrice ||
+      item.supplierPrice ||
+      0;
+
+    return {
+      id: String(item.pid || item.id || item.productId || `cj-${index}`),
+      source: "cj",
+      name,
+      nameOriginal: name,
+      price: numberValue(price),
+      category,
+      description: item.description || item.productDescription || "",
+      image: item.image || item.productImage || item.bigImage || "",
+      images: extractImages(item),
+      raw: item
+    };
+  });
+}
+
+async function getProductsFromAliExpress() {
+  return [];
+}
+
+async function getProductsFromShein() {
+  return [];
+}
+
+async function buildProductEngine() {
   const now = Date.now();
 
-  if (cachedAccessToken && now - cachedAccessTokenTime < 12 * 60 * 60 * 1000) {
-    return cachedAccessToken;
+  if (cachedProducts && now - cachedProductsTime < CACHE_TIME_MS) {
+    return cachedProducts;
   }
 
-  const url = `${CJ_BASE_URL}/authentication/getAccessToken`;
+  const cjProducts = await getProductsFromCJ();
+  const aliProducts = await getProductsFromAliExpress();
+  const sheinProducts = await getProductsFromShein();
 
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        apiKey
-      })
-    });
+  const combined = [...cjProducts, ...aliProducts, ...sheinProducts];
 
-    const data = await response.json().catch(() => null);
+  const clean = combined.filter((product) => {
+    if (isBlocked(product)) return false;
 
-    if (!response.ok || data?.success === false || data?.result === false) {
-      console.error("CJ authentication failed:", data);
-      return null;
-    }
+    const images = product.images?.length ? product.images : extractImages(product);
+    const price = numberValue(product.price);
 
-    const accessToken =
-      data?.data?.accessToken ||
-      data?.data?.access_token ||
-      data?.accessToken ||
-      data?.access_token ||
-      "";
+    if (!price || price <= 0) return false;
+    if (!images.length) return false;
 
-    if (!accessToken) {
-      console.error("CJ authentication returned no access token:", data);
-      return null;
-    }
+    return true;
+  });
 
-    cachedAccessToken = accessToken;
-    cachedAccessTokenTime = Date.now();
+  const finalProducts = [];
 
-    console.log("CJ access token created successfully.");
+  for (let index = 0; index < clean.length; index++) {
+    const product = clean[index];
 
-    return accessToken;
-  } catch (error) {
-    console.error("CJ authentication error:", error);
-    return null;
+    const images = product.images?.length ? product.images : extractImages(product);
+    const image = images[0] || product.image;
+
+    const pricing = calculatePrice(product.price);
+
+    if (!pricing.salePrice || pricing.estimatedProfit <= 0) continue;
+
+    const baseProduct = {
+      id: product.id,
+      source: product.source || "unknown",
+      nameOriginal: product.nameOriginal || product.name,
+      category: product.category || "מוצרים",
+      description: cleanText(product.description),
+      image,
+      images,
+      supplierPrice: pricing.supplierPrice,
+      salePrice: pricing.salePrice,
+      estimatedProfit: pricing.estimatedProfit,
+      marginPercent: pricing.marginPercent
+    };
+
+    const translation = await translateWithAI(baseProduct);
+
+    const readyProduct = {
+      ...baseProduct,
+      name: translation.nameHe,
+      nameHe: translation.nameHe,
+      descriptionHe: translation.descriptionHe,
+      categoryHe: translation.categoryHe,
+      translationMode: translation.translationMode,
+      price: pricing.salePrice,
+      oldPrice: roundPrice(pricing.salePrice * 1.28),
+      isNew: index < 10,
+      isSale: index % 3 === 0
+    };
+
+    readyProduct.buyliScore = calculateBuyliScore(readyProduct);
+
+    finalProducts.push(readyProduct);
   }
+
+  finalProducts.sort((a, b) => b.buyliScore - a.buyliScore);
+
+  cachedProducts = finalProducts;
+  cachedProductsTime = now;
+
+  return finalProducts;
 }
 
-async function getProductsFromCJ() {
-  const accessToken = await getCJAccessToken();
-
-  if (!accessToken) {
-    return FALLBACK_PRODUCTS;
-  }
-
- const url = `${CJ_BASE_URL}/product/list?pageNum=1&pageSize=100`;
-
-  try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        "CJ-Access-Token": accessToken
-      }
-    });
-
-    const data = await response.json().catch(() => null);
-
-    if (!response.ok || data?.success === false || data?.result === false) {
-      console.error("CJ product request failed:", data);
-      return FALLBACK_PRODUCTS;
-    }
-
-    const list = extractProductList(data);
-
-    if (!Array.isArray(list) || list.length === 0) {
-      console.warn("CJ returned empty product list:", data);
-      return FALLBACK_PRODUCTS;
-    }
-
-    return list.map(mapCJProduct);
-  } catch (error) {
-    console.error("CJ product service error:", error);
-    return FALLBACK_PRODUCTS;
-  }
-}
-
-app.get("/", function (req, res) {
+app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: "Buyli backend is running",
-    syncedAt: new Date().toISOString()
+    app: "Buyli Backend",
+    version: "V8 Product Engine",
+    endpoints: ["/api/products", "/api/health"]
   });
 });
 
-app.get("/api/products", async function (req, res) {
+app.get("/api/health", (req, res) => {
+  res.json({
+    success: true,
+    version: "V8",
+    cjConfigured: Boolean(process.env.CJ_API_KEY || process.env.CJ_ACCESS_TOKEN),
+    aiConfigured: Boolean(process.env.OPENAI_API_KEY),
+    aiEnabled: process.env.ENABLE_AI_TRANSLATION === "true",
+    cacheProducts: Boolean(cachedProducts),
+    time: new Date().toISOString()
+  });
+});
+
+app.get("/api/products", async (req, res) => {
   try {
-    const products = await getProductsFromCJ();
+    const products = await buildProductEngine();
 
     res.json({
       success: true,
-      source: products?.[0]?.source || "fallback",
-      product: products,
-      products: products,
+      source: "buyli-v8",
       count: products.length,
-      syncedAt: new Date().toISOString()
+      products,
+      product: products,
+      engine: {
+        pricing: true,
+        filtering: true,
+        gallery: true,
+        buyliScore: true,
+        aiTranslation: process.env.ENABLE_AI_TRANSLATION === "true",
+        aliExpressReady: true,
+        sheinReady: true
+      }
     });
   } catch (error) {
-    res.json({
-      success: true,
-      source: "fallback-error",
-      product: FALLBACK_PRODUCTS,
+    res.status(500).json({
+      success: false,
+      message: "Buyli Product Engine failed",
+      error: error.message,
       products: FALLBACK_PRODUCTS,
-      count: FALLBACK_PRODUCTS.length,
-      error: error?.message || "Unknown error",
-      syncedAt: new Date().toISOString()
+      product: FALLBACK_PRODUCTS
     });
   }
 });
 
-app.get("/products", async function (req, res) {
-  try {
-    const products = await getProductsFromCJ();
-
-    res.json({
-      success: true,
-      source: products?.[0]?.source || "fallback",
-      product: products,
-      products: products,
-      count: products.length,
-      syncedAt: new Date().toISOString()
-    });
-  } catch (error) {
-    res.json({
-      success: true,
-      source: "fallback-error",
-      product: FALLBACK_PRODUCTS,
-      products: FALLBACK_PRODUCTS,
-      count: FALLBACK_PRODUCTS.length,
-      error: error?.message || "Unknown error",
-      syncedAt: new Date().toISOString()
-    });
-  }
-});
-
-app.listen(PORT, function () {
-  console.log(`Buyli backend running on port ${PORT}`);
+app.listen(PORT, () => {
+  console.log(`Buyli V8 backend running on port ${PORT}`);
 });
