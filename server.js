@@ -661,10 +661,8 @@ async function getProductsFromShein() {
 }
 
 function chooseDefaultSource() {
-  const aliReady = Boolean(env("ALIEXPRESS_APP_KEY") && env("ALIEXPRESS_APP_SECRET") && env("ALIEXPRESS_TRACKING_ID"));
-  const cjReady = Boolean(env("CJ_API_KEY", "CJ_ACCESS_TOKEN", "CJ_API_TOKEN"));
-  if (aliReady) return "aliexpress";
-  if (cjReady) return "cj";
+  // Buyli live default provider is AliExpress.
+  // CJ stays available for future use only with ?source=cj, but it is NOT used automatically.
   return "aliexpress";
 }
 
@@ -774,6 +772,18 @@ async function productsHandler(req, res) {
       unlimitedMode: BUYLI_UNLIMITED_MODE,
       cachedCatalogCount: lastCatalog.length,
       blockedCount: lastBlockedProducts.length,
+      providerStatus: {
+        aliexpress: {
+          selected: source === "aliexpress",
+          ready: Boolean(env("ALIEXPRESS_APP_KEY") && env("ALIEXPRESS_APP_SECRET") && env("ALIEXPRESS_TRACKING_ID")),
+          missing: [
+            !env("ALIEXPRESS_APP_KEY") ? "ALIEXPRESS_APP_KEY" : null,
+            !env("ALIEXPRESS_APP_SECRET") ? "ALIEXPRESS_APP_SECRET" : null,
+            !env("ALIEXPRESS_TRACKING_ID") ? "ALIEXPRESS_TRACKING_ID" : null
+          ].filter(Boolean)
+        },
+        cj: { availableForFuture: Boolean(env("CJ_API_KEY")), autoFallback: false }
+      },
       syncedAt: new Date().toISOString()
     });
   } catch (error) {
