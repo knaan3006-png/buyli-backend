@@ -673,8 +673,14 @@ async function getProducts(keyword = "watch", source = "all", page = 1, pageSize
   return [...cj, ...aliexpress, ...shein];
 }
 
-app.get("/health", (_req, res) => {
+function healthHandler(_req, res) {
   res.json({ ok: true, name: "Buyli backend proxy", providers: ["cj", "aliexpress", "shein"] });
+}
+app.get("/health", healthHandler);
+app.get("/api/health", healthHandler);
+
+app.get("/api/providers", (_req, res) => {
+  res.redirect(307, "/providers");
 });
 
 app.get("/providers", (_req, res) => {
@@ -693,6 +699,10 @@ app.get("/providers", (_req, res) => {
       { key: "shein", ready: Boolean(env("SHEIN_FEED_URL") || env("SHEIN_AFFILIATE_ID")), mode: "feed_or_affiliate" }
     ]
   });
+});
+
+app.get("/api/aliexpress/status", (_req, res) => {
+  res.redirect(307, "/aliexpress/status");
 });
 
 app.get("/aliexpress/status", (_req, res) => {
@@ -734,7 +744,7 @@ app.get("/aliexpress/test", async (req, res) => {
   }
 });
 
-app.get("/products", async (req, res) => {
+async function productsHandler(req, res) {
   try {
     const keyword = String(req.query.keyword || "watch");
     const source = String(req.query.source || "aliexpress").toLowerCase();
@@ -760,7 +770,9 @@ app.get("/products", async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : "Unknown error", products: [] });
   }
-});
+}
+app.get("/products", productsHandler);
+app.get("/api/products", productsHandler);
 
 app.post("/sync-products", async (req, res) => {
   try {
@@ -786,8 +798,16 @@ app.post("/admin/orders", (req, res) => {
   res.json({ ok: true, stored: true, count: orderEvents.length });
 });
 
+app.get("/api/admin/orders", (_req, res) => {
+  res.redirect(307, "/admin/orders");
+});
+
 app.get("/admin/orders", (_req, res) => {
   res.json({ ok: true, orders: orderEvents, metrics: summarizeOrders(orderEvents), updatedAt: new Date().toISOString() });
+});
+
+app.get("/api/admin/metrics", (_req, res) => {
+  res.redirect(307, "/admin/metrics");
 });
 
 app.get("/admin/metrics", (_req, res) => {
