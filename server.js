@@ -499,7 +499,7 @@ async function getCJAccessToken() {
 
 async function getProductsFromCJ(keyword = "watch") {
   const token = await getCJAccessToken();
-  if (!token) return FALLBACK_PRODUCTS.filter((item) => item.source === "cj");
+  if (!token) return [];
 
   const url = `${CJ_BASE_URL}/product/list`;
   const response = await fetch(url, {
@@ -511,11 +511,11 @@ async function getProductsFromCJ(keyword = "watch") {
   const data = await response.json().catch(() => null);
   if (!response.ok || data?.success === false || data?.result === false) {
     console.error("CJ request failed", data);
-    return FALLBACK_PRODUCTS.filter((item) => item.source === "cj");
+    return [];
   }
 
   const list = extractList(data);
-  if (!Array.isArray(list) || list.length === 0) return FALLBACK_PRODUCTS.filter((item) => item.source === "cj");
+  if (!Array.isArray(list) || list.length === 0) return [];
   return list.map(mapCJProduct);
 }
 
@@ -656,8 +656,16 @@ async function getProductsFromShein() {
     });
   } catch (error) {
     console.error("SHEIN feed failed", error);
-    return FALLBACK_PRODUCTS.filter((item) => item.source === "shein");
+    return [];
   }
+}
+
+function chooseDefaultSource() {
+  const aliReady = Boolean(env("ALIEXPRESS_APP_KEY") && env("ALIEXPRESS_APP_SECRET") && env("ALIEXPRESS_TRACKING_ID"));
+  const cjReady = Boolean(env("CJ_API_KEY", "CJ_ACCESS_TOKEN", "CJ_API_TOKEN"));
+  if (aliReady) return "aliexpress";
+  if (cjReady) return "cj";
+  return "aliexpress";
 }
 
 async function getProducts(keyword = "watch", source = "all", page = 1, pageSize = DEFAULT_PAGE_SIZE) {
@@ -674,7 +682,7 @@ async function getProducts(keyword = "watch", source = "all", page = 1, pageSize
 }
 
 function healthHandler(_req, res) {
-  res.json({ ok: true, name: "Buyli backend proxy", providers: ["cj", "aliexpress", "shein"] });
+  res.json({ ok: true, name: "Buyli backend proxy", providers: ["cj", "aliexpress", "shein"], defaultSource: chooseDefaultSource() });
 }
 app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
@@ -747,7 +755,8 @@ app.get("/aliexpress/test", async (req, res) => {
 async function productsHandler(req, res) {
   try {
     const keyword = String(req.query.keyword || "watch");
-    const source = String(req.query.source || "aliexpress").toLowerCase();
+    const requestedSource = String(req.query.source || "auto").toLowerCase();
+    const source = requestedSource === "auto" ? chooseDefaultSource() : requestedSource;
     const page = requestedPage(req.query.page);
     const pageSize = requestedPageSize(req.query.pageSize);
     const rawProducts = await getProducts(keyword, source, page, pageSize);
@@ -774,10 +783,11 @@ async function productsHandler(req, res) {
 app.get("/products", productsHandler);
 app.get("/api/products", productsHandler);
 
-app.post("/sync-products", async (req, res) => {
+async function syncProductsHandler(req, res) {
   try {
     const keyword = String(req.body?.keyword || "watch");
-    const source = String(req.body?.source || "aliexpress").toLowerCase();
+    const requestedSource = String(req.body?.source || "auto").toLowerCase();
+    const source = requestedSource === "auto" ? chooseDefaultSource() : requestedSource;
     const page = requestedPage(req.body?.page);
     const pageSize = requestedPageSize(req.body?.pageSize);
     const rawProducts = await getProducts(keyword, source, page, pageSize);
@@ -788,7 +798,9 @@ app.post("/sync-products", async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : "Unknown error", products: [] });
   }
-});
+}
+app.post("/sync-products", syncProductsHandler);
+app.post("/api/sync-products", syncProductsHandler);
 
 
 app.post("/admin/orders", (req, res) => {
