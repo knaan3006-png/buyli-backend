@@ -1,13 +1,6 @@
-import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
-
-// Load .env explicitly from the current backend-proxy folder
-const dotenvResult = dotenv.config({ path: ".env" });
-if (dotenvResult.error) {
-  console.warn(".env was not loaded. Make sure backend-proxy/.env exists.");
-}
 
 const app = express();
 const PORT = process.env.PORT || 8080;
