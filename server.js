@@ -25,6 +25,47 @@ const MAX_BUYLI_PAGE_SIZE = 240;
 const BUYLI_UNLIMITED_MODE = true;
 const SEARCH_BATCH_PAGES = 3;
 
+// Buyli catalog preload: admin/backend pulls products BEFORE the customer scrolls.
+// Customers see products already saved in the server cache.
+const CATALOG_PRELOAD_KEYWORDS = [
+  "women dress",
+  "women bag",
+  "smart watch",
+  "kitchen organizer",
+  "home gadgets",
+  "car accessories",
+  "beauty tools",
+  "phone accessories",
+  "sports accessories",
+  "kids toys",
+  "shoes sneakers",
+  "jewelry women",
+  "home decor",
+  "pet accessories",
+  "travel accessories"
+];
+const PRELOAD_DEFAULT_PAGES = 4;
+const PRELOAD_MAX_PAGES = 25;
+const PRELOAD_DEFAULT_PAGE_SIZE = 120;
+
+let catalogPreloadJob = {
+  running: false,
+  id: "",
+  startedAt: "",
+  finishedAt: "",
+  source: "aliexpress",
+  keywords: [],
+  pagesPerKeyword: 0,
+  pageSize: 0,
+  totalFetched: 0,
+  totalAccepted: 0,
+  totalAdded: 0,
+  catalogCount: 0,
+  currentKeyword: "",
+  currentPage: 0,
+  errors: []
+};
+
 const SEARCH_INTENT_RULES = [
   {
     id: "dress",
@@ -187,6 +228,113 @@ function rememberProducts(source, keyword, page, products) {
     seen.add(id);
     return true;
   });
+}
+
+function getCatalogSnapshot() {
+  return [...lastCatalog].sort((a, b) => {
+    const aLive = a.sourceStatus === "live" ? 1 : 0;
+    const bLive = b.sourceStatus === "live" ? 1 : 0;
+    return bLive - aLive;
+  });
+}
+
+function parseKeywordList(value) {
+  if (!value) return CATALOG_PRELOAD_KEYWORDS;
+  const parsed = String(value)
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  return parsed.length ? parsed : CATALOG_PRELOAD_KEYWORDS;
+}
+
+function requestedPreloadPages(value) {
+  const n = Number(value || PRELOAD_DEFAULT_PAGES);
+  if (!Number.isFinite(n) || n <= 0) return PRELOAD_DEFAULT_PAGES;
+  return Math.min(Math.floor(n), PRELOAD_MAX_PAGES);
+}
+
+async function preloadAliExpressCatalog({ keywords = CATALOG_PRELOAD_KEYWORDS, pages = PRELOAD_DEFAULT_PAGES, pageSize = PRELOAD_DEFAULT_PAGE_SIZE } = {}) {
+  if (catalogPreloadJob.running) return catalogPreloadJob;
+
+  const safeKeywords = Array.isArray(keywords) && keywords.length ? keywords : CATALOG_PRELOAD_KEYWORDS;
+  const safePages = requestedPreloadPages(pages);
+  const safePageSize = requestedPageSize(pageSize || PRELOAD_DEFAULT_PAGE_SIZE);
+
+  catalogPreloadJob = {
+    running: true,
+    id: `PRELOAD-${Date.now()}`,
+    startedAt: new Date().toISOString(),
+    finishedAt: "",
+    source: "aliexpress",
+    keywords: safeKeywords,
+    pagesPerKeyword: safePages,
+    pageSize: safePageSize,
+    totalFetched: 0,
+    totalAccepted: 0,
+    totalAdded: 0,
+    catalogCount: lastCatalog.length,
+    currentKeyword: "",
+    currentPage: 0,
+    errors: []
+  };
+
+  try {
+    for (const keyword of safeKeywords) {
+      for (let page = 1; page <= safePages; page++) {
+        catalogPreloadJob.currentKeyword = keyword;
+        catalogPreloadJob.currentPage = page;
+
+        try {
+          const before = lastCatalog.length;
+          const rawProducts = await getProductsFromAliExpress(keyword, page, safePageSize);
+          catalogPreloadJob.totalFetched += rawProducts.length;
+
+          const products = filterCatalog(rawProducts);
+          catalogPreloadJob.totalAccepted += products.length;
+          rememberProducts("aliexpress", keyword, page, products);
+
+          const addedNow = Math.max(0, lastCatalog.length - before);
+          catalogPreloadJob.totalAdded += addedNow;
+          catalogPreloadJob.catalogCount = lastCatalog.length;
+
+          syncJobs.unshift({
+            id: `PRELOAD-${Date.now()}`,
+            keyword,
+            source: "aliexpress",
+            page,
+            pageSize: safePageSize,
+            count: products.length,
+            added: addedNow,
+            createdAt: new Date().toISOString()
+          });
+          syncJobs = syncJobs.slice(0, 50);
+        } catch (error) {
+          catalogPreloadJob.errors.push({
+            keyword,
+            page,
+            error: error instanceof Error ? error.message : "Unknown error"
+          });
+        }
+      }
+    }
+  } finally {
+    catalogPreloadJob.running = false;
+    catalogPreloadJob.finishedAt = new Date().toISOString();
+    catalogPreloadJob.catalogCount = lastCatalog.length;
+  }
+
+  return catalogPreloadJob;
+}
+
+function startPreloadJob(options) {
+  if (!catalogPreloadJob.running) {
+    preloadAliExpressCatalog(options).catch((error) => {
+      catalogPreloadJob.running = false;
+      catalogPreloadJob.finishedAt = new Date().toISOString();
+      catalogPreloadJob.errors.push({ error: error instanceof Error ? error.message : "Unknown error" });
+    });
+  }
+  return catalogPreloadJob;
 }
 
 function summarizeOrders(orders = []) {
@@ -752,11 +900,39 @@ app.get("/aliexpress/test", async (req, res) => {
 
 async function productsHandler(req, res) {
   try {
-    const keyword = String(req.query.keyword || "watch");
     const requestedSource = String(req.query.source || "auto").toLowerCase();
     const source = requestedSource === "auto" ? chooseDefaultSource() : requestedSource;
     const page = requestedPage(req.query.page);
     const pageSize = requestedPageSize(req.query.pageSize);
+    const hasExplicitKeyword = typeof req.query.keyword === "string" && req.query.keyword.trim() !== "";
+    const keyword = String(req.query.keyword || "watch");
+
+    // Customer-facing default: if the catalog was preloaded by Admin, return the full ready catalog.
+    // That means the customer can scroll immediately through products already pulled from AliExpress.
+    const wantsCachedCatalog =
+      String(req.query.catalog || "").toLowerCase() === "1" ||
+      String(req.query.cached || "").toLowerCase() === "1" ||
+      (!hasExplicitKeyword && lastCatalog.length > 0);
+
+    if (wantsCachedCatalog) {
+      const products = getCatalogSnapshot();
+      return res.json({
+        products,
+        count: products.length,
+        source: "aliexpress-cache",
+        page: 1,
+        pageSize: products.length,
+        hasMore: catalogPreloadJob.running,
+        nextPage: null,
+        customerMode: "preloaded_catalog",
+        unlimitedMode: BUYLI_UNLIMITED_MODE,
+        cachedCatalogCount: lastCatalog.length,
+        blockedCount: lastBlockedProducts.length,
+        preloadStatus: catalogPreloadJob,
+        syncedAt: new Date().toISOString()
+      });
+    }
+
     const rawProducts = await getProducts(keyword, source, page, pageSize);
     const products = filterCatalog(rawProducts);
     rememberProducts(source, keyword, page, products);
@@ -772,6 +948,7 @@ async function productsHandler(req, res) {
       unlimitedMode: BUYLI_UNLIMITED_MODE,
       cachedCatalogCount: lastCatalog.length,
       blockedCount: lastBlockedProducts.length,
+      preloadStatus: catalogPreloadJob,
       providerStatus: {
         aliexpress: {
           selected: source === "aliexpress",
@@ -792,6 +969,42 @@ async function productsHandler(req, res) {
 }
 app.get("/products", productsHandler);
 app.get("/api/products", productsHandler);
+
+function preloadProductsHandler(req, res) {
+  const input = req.method === "POST" ? req.body || {} : req.query || {};
+  const pages = requestedPreloadPages(input.pages);
+  const pageSize = requestedPageSize(input.pageSize || PRELOAD_DEFAULT_PAGE_SIZE);
+  const keywords = parseKeywordList(input.keywords);
+
+  const job = startPreloadJob({ keywords, pages, pageSize });
+  res.json({
+    ok: true,
+    message: job.running ? "AliExpress catalog preload is running" : "AliExpress catalog preload already completed or not started",
+    job,
+    testLink: "/products?catalog=1",
+    statusLink: "/preload-status"
+  });
+}
+
+app.get("/preload-products", preloadProductsHandler);
+app.get("/api/preload-products", preloadProductsHandler);
+app.post("/preload-products", preloadProductsHandler);
+app.post("/api/preload-products", preloadProductsHandler);
+
+app.get("/preload-status", (_req, res) => {
+  res.json({ ok: true, job: catalogPreloadJob, cachedCatalogCount: lastCatalog.length, cachedPages: catalogCache.size, updatedAt: new Date().toISOString() });
+});
+app.get("/api/preload-status", (_req, res) => {
+  res.redirect(307, "/preload-status");
+});
+
+app.get("/catalog", (_req, res) => {
+  const products = getCatalogSnapshot();
+  res.json({ ok: true, products, count: products.length, source: "aliexpress-cache", preloadStatus: catalogPreloadJob, updatedAt: new Date().toISOString() });
+});
+app.get("/api/catalog", (_req, res) => {
+  res.redirect(307, "/catalog");
+});
 
 async function syncProductsHandler(req, res) {
   try {
@@ -850,6 +1063,7 @@ app.get("/admin/metrics", (_req, res) => {
     recentOrders: orderEvents.slice(0, 20),
     blockedProducts: lastBlockedProducts.length,
     blockedPreview: lastBlockedProducts.slice(0, 20),
+    preloadStatus: catalogPreloadJob,
     bySource,
     supplierValue: Number(supplierValue.toFixed(2)),
     providers: {
@@ -897,8 +1111,10 @@ app.get("/admin", (_req, res) => {
     <button class="btn dark" onclick="testProducts('watch')">בדוק שעונים</button>
     <button class="btn dark" onclick="testProducts('bag')">בדוק תיקים</button>
     <button class="btn dark" onclick="testProducts('kitchen')">בדוק מטבח</button>
+    <button class="btn" onclick="preloadCatalog()">משוך קטלוג מראש</button>
+    <button class="btn dark" onclick="showCatalog()">הצג קטלוג שמור</button>
   </div></div>
-  <div class="section"><h2>מצב מערכת</h2><div class="card"><div id="status">טוען...</div></div></div>
+  <div class="section"><h2>מצב מערכת</h2><div class="card"><div id="status">טוען...</div><pre id="preload">Preload status will appear here.</pre></div></div>
   <div class="section"><h2>הזמנות אחרונות</h2><table><thead><tr><th>מספר</th><th>לקוח</th><th>שולם</th><th>עלות ספק</th><th>רווח</th><th>סטטוס</th></tr></thead><tbody id="orders"><tr><td colspan="6" class="muted">אין הזמנות עדיין</td></tr></tbody></table></div>
   <div class="section"><h2>בדיקת מוצרים</h2><pre id="products">לחץ על בדיקת קטגוריה כדי לראות מוצרים חיים.</pre></div>
 <script>
@@ -912,6 +1128,7 @@ async function loadAll(){
   document.getElementById('ordersCount').textContent=s.orderCount||d.recentOrders?.length||0;
   const ali=d.providers?.aliexpress||{};
   document.getElementById('status').innerHTML = 'AliExpress: <b class="' + (ali.ready ? 'ok' : 'bad') + '">' + (ali.ready ? 'מחובר' : 'לא מחובר') + '</b> | App Status: ' + (ali.status || '') + ' | Tracking ID: ' + (ali.trackingId || '') + ' | מוצרים ב-cache: ' + (d.productsLoaded || 0) + ' | מוצרים חסומים: ' + (d.blockedProducts || 0);
+  document.getElementById('preload').textContent = JSON.stringify(d.preloadStatus || {}, null, 2);
   const rows = (d.recentOrders || []).map(function(o){ return '<tr><td>' + (o.id || '') + '</td><td>' + (o.customerName || (o.customer && o.customer.name) || '') + '</td><td>' + money(o.customerPaid || o.total || 0) + '</td><td>' + money(o.supplierCost || 0) + '</td><td>' + money(o.buyliProfit || 0) + '</td><td>' + (o.orderStatus || o.status || '') + '</td></tr>'; }).join('');
   document.getElementById('orders').innerHTML=rows||'<tr><td colspan="6" class="muted">אין הזמנות עדיין</td></tr>';
 }
@@ -920,6 +1137,19 @@ async function testProducts(k){
   const r=await fetch('/products?source=aliexpress&keyword='+encodeURIComponent(k)+'&pageSize=20');
   const d=await r.json();
   document.getElementById('products').textContent=JSON.stringify({count:d.count, products:(d.products||[]).slice(0,5)},null,2);
+  loadAll();
+}
+async function preloadCatalog(){
+  document.getElementById('products').textContent='התחלתי משיכת קטלוג מראש מאליאקספרס. זה רץ ברקע...';
+  const r=await fetch('/preload-products?pages=4&pageSize=120');
+  const d=await r.json();
+  document.getElementById('products').textContent=JSON.stringify(d,null,2);
+  setTimeout(loadAll, 1500);
+}
+async function showCatalog(){
+  const r=await fetch('/catalog');
+  const d=await r.json();
+  document.getElementById('products').textContent=JSON.stringify({count:d.count, products:(d.products||[]).slice(0,10)},null,2);
   loadAll();
 }
 loadAll();
@@ -932,4 +1162,4 @@ app.listen(PORT, () => {
   console.log(`AliExpress ready: ${Boolean(env("ALIEXPRESS_APP_KEY") && env("ALIEXPRESS_APP_SECRET") && env("ALIEXPRESS_TRACKING_ID"))}`);
 });
 
-export { getCJAccessToken, getProductsFromCJ, getProductsFromAliExpress, getProductsFromShein, getProducts, callAliExpressApi };
+export { getCJAccessToken, getProductsFromCJ, getProductsFromAliExpress, getProductsFromShein, getProducts, callAliExpressApi, preloadAliExpressCatalog };
