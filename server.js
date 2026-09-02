@@ -45,8 +45,16 @@ const CATALOG_PRELOAD_KEYWORDS = [
   "travel accessories"
 ];
 const PRELOAD_DEFAULT_PAGES = 4;
-const PRELOAD_MAX_PAGES = 25;
+const PRELOAD_MAX_PAGES = 50;
 const PRELOAD_DEFAULT_PAGE_SIZE = 120;
+
+// Auto catalog preload: starts automatically when Render/Node server starts.
+// This prepares products before customers browse the app.
+const AUTO_PRELOAD_ENABLED = String(process.env.AUTO_PRELOAD_ENABLED || "true").toLowerCase() !== "false";
+const AUTO_PRELOAD_DELAY_MS = Number(process.env.AUTO_PRELOAD_DELAY_MS || 2500);
+const AUTO_PRELOAD_PAGES = Number(process.env.AUTO_PRELOAD_PAGES || 12);
+const AUTO_PRELOAD_PAGE_SIZE = Number(process.env.AUTO_PRELOAD_PAGE_SIZE || PRELOAD_DEFAULT_PAGE_SIZE);
+const AUTO_PRELOAD_REPEAT_MINUTES = Number(process.env.AUTO_PRELOAD_REPEAT_MINUTES || 180);
 
 let catalogPreloadJob = {
   running: false,
@@ -335,6 +343,33 @@ function startPreloadJob(options) {
     });
   }
   return catalogPreloadJob;
+}
+
+function isAliExpressConfigured() {
+  return Boolean(env("ALIEXPRESS_APP_KEY") && env("ALIEXPRESS_APP_SECRET") && env("ALIEXPRESS_TRACKING_ID"));
+}
+
+function startAutomaticCatalogPreload(reason = "server-start") {
+  if (!AUTO_PRELOAD_ENABLED) {
+    console.log("Buyli auto preload is disabled by AUTO_PRELOAD_ENABLED=false");
+    return catalogPreloadJob;
+  }
+
+  if (!isAliExpressConfigured()) {
+    console.warn("Buyli auto preload skipped: missing AliExpress environment variables.");
+    return catalogPreloadJob;
+  }
+
+  if (catalogPreloadJob.running) {
+    console.log("Buyli auto preload skipped: preload already running.");
+    return catalogPreloadJob;
+  }
+
+  const pages = requestedPreloadPages(AUTO_PRELOAD_PAGES);
+  const pageSize = requestedPageSize(AUTO_PRELOAD_PAGE_SIZE);
+
+  console.log(`Buyli auto preload started (${reason}) with ${CATALOG_PRELOAD_KEYWORDS.length} keywords, ${pages} pages each, pageSize ${pageSize}`);
+  return startPreloadJob({ keywords: CATALOG_PRELOAD_KEYWORDS, pages, pageSize });
 }
 
 function summarizeOrders(orders = []) {
@@ -1111,7 +1146,7 @@ app.get("/admin", (_req, res) => {
     <button class="btn dark" onclick="testProducts('watch')">בדוק שעונים</button>
     <button class="btn dark" onclick="testProducts('bag')">בדוק תיקים</button>
     <button class="btn dark" onclick="testProducts('kitchen')">בדוק מטבח</button>
-    <button class="btn" onclick="preloadCatalog()">משוך קטלוג מראש</button>
+    <button class="btn" onclick="preloadCatalog()">המשך משיכה אוטומטית</button>
     <button class="btn dark" onclick="showCatalog()">הצג קטלוג שמור</button>
   </div></div>
   <div class="section"><h2>מצב מערכת</h2><div class="card"><div id="status">טוען...</div><pre id="preload">Preload status will appear here.</pre></div></div>
@@ -1159,7 +1194,17 @@ loadAll();
 
 app.listen(PORT, () => {
   console.log(`Buyli backend proxy running on port ${PORT}`);
-  console.log(`AliExpress ready: ${Boolean(env("ALIEXPRESS_APP_KEY") && env("ALIEXPRESS_APP_SECRET") && env("ALIEXPRESS_TRACKING_ID"))}`);
+  console.log(`AliExpress ready: ${isAliExpressConfigured()}`);
+
+  // One-step behavior: when the backend is live, it starts filling the catalog automatically.
+  // The app/customer should read from /products?catalog=1 or /catalog and receive already cached products.
+  setTimeout(() => startAutomaticCatalogPreload("server-start"), AUTO_PRELOAD_DELAY_MS);
+
+  if (AUTO_PRELOAD_REPEAT_MINUTES > 0) {
+    setInterval(() => {
+      startAutomaticCatalogPreload("scheduled-refresh");
+    }, AUTO_PRELOAD_REPEAT_MINUTES * 60 * 1000);
+  }
 });
 
 export { getCJAccessToken, getProductsFromCJ, getProductsFromAliExpress, getProductsFromShein, getProducts, callAliExpressApi, preloadAliExpressCatalog };
